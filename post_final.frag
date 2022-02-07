@@ -28,9 +28,10 @@ uniform float damage_flash_interpolation;
 uniform vec4  additive_overlay_color;
 uniform vec4  overlay_color;
 uniform vec4  overlay_color_blindness;
+uniform vec4  overlay_color_blindness_ending;
 uniform float low_health_indicator_alpha;
 
-uniform vec4 color_grading;
+uniform vec4 color_correction;
 uniform vec4 brightness_contrast_gamma;
 
 uniform float fog_amount_background;
@@ -53,6 +54,11 @@ varying vec2 tex_coord_glow_;
 varying vec2 world_pos;
 varying vec2 tex_coord_skylight;
 varying vec2 tex_coord_fogofwar;
+
+
+bool is_enraged = drugged_fractals_amount > 0.0;
+bool is_possibly_drunk = drugged_doublevision_amount < 666.0;
+
 
 
 // -----------------------------------------------------------------------------------------------
@@ -163,7 +169,6 @@ void main()
 	const vec3 LOW_HEALTH_INDICATOR_COLOR = vec3( 0.7, 0.1, 0.0 );
 
 	const float SCREEN_W = 427.0;
-	const float SCREEN_H = 242.0;
 
 // ==========================================================================================================
 // fetch texture coords etc =============================================================================
@@ -179,7 +184,7 @@ void main()
     vec2 noise_scale = vec2(1.0,1.0) / ( NOISE_TEX_SIZE / window_size ); // scale the noise so that 1 pixel on source maps to 1 pixel on screen. TODO: move this math to CPU
 
     vec4 noise = unpack_noise( texture2D( tex_noise, tex_coord * noise_scale + noise_time * 10.0 ) );
-    vec4 noise_perlin2 = texture2D( tex_perlin_noise, world_pos * 0.0004 + vec2(0.0,noise_time * 0.005) );
+    vec4 noise_perlin2 = texture2D( tex_perlin_noise, world_pos * 0.0004 + vec2(noise_time * 0.01, 0.0) );
 
 // ===========================================================================================================
 // liquid distortion/refraction effect (calculate distorted texture coordinates for later use) ===============
@@ -210,7 +215,7 @@ void main()
 		tex_coord_glow += vec2( liquid_distortion_offset.x, -liquid_distortion_offset.y );
 	}
 
-   	vec2 pos_seed = vec2(camera_pos.x / SCREEN_W, camera_pos.y / SCREEN_H) + vec2( gl_TexCoord[0].x, - gl_TexCoord[0].y );
+   	vec2 pos_seed = vec2(camera_pos.x / SCREEN_W, camera_pos.y / 242.0) + vec2( gl_TexCoord[0].x, - gl_TexCoord[0].y );
 
 #ifdef TRIPPY
    	// trip distortion
@@ -224,7 +229,7 @@ void main()
 	float tex_coord_warped_lerp = length(tex_coord - vec2(0.5,0.5)) * drugged_distortion_amount;
 	tex_coord = mix( tex_coord, tex_coord_warped, tex_coord_warped_lerp );
 
-   	pos_seed = vec2(camera_pos.x / SCREEN_W, camera_pos.y / SCREEN_H) + vec2( tex_coord.x, - tex_coord.y );
+   	pos_seed = vec2(camera_pos.x / SCREEN_W, camera_pos.y / 242.0) + vec2( tex_coord.x, - tex_coord.y );
 #endif
 
 // ===========================================================================================================
@@ -235,13 +240,16 @@ void main()
 	
 #ifdef TRIPPY
 	// drunk doublevision
+  if (is_possibly_drunk) {
 	vec2 doublevision_offset = vec2(0.005 * cos(time*0.5)  * drugged_doublevision_amount,0.005 * sin(time*0.5) * drugged_doublevision_amount );
 	color_fg = mix( color_fg, texture2D(tex_fg, tex_coord + doublevision_offset  ), 0.5 );
 	color = mix( color, texture2D(tex_bg, tex_coord + doublevision_offset  ).rgb, 0.5 );
+  }
 #endif
 
 	vec3 color_orig    = color;
 	vec4 color_fg_orig = color_fg;
+
 
 // ============================================================================================================
 // sample glow texture ========================================================================================
@@ -288,7 +296,7 @@ void main()
 
 		vec3 fractals0 = render( pos_seed * ( mix( 20.0, 20.0 - (perlin_noise_static.x+perlin_noise_static.y) * 15.0, drugged_fractals_size  ) ) ) * 0.2;
 		fractals0 = max(fractals0,vec3(0.0));
-		glow.rgb += fractals0.rgb * fractals_alpha * 2.5 * drugged_fractals_amount;
+		glow.rgb += fractals0.rgb * fractals_alpha * 2.5 * 0.0;
 	#endif
 	}
 
@@ -334,9 +342,8 @@ void main()
 // ============================================================================================================
 // calculate fog of war =======================================================================================
 
-	// fetch fog of war and dust contribution from a texture
+	// fetch fog of war contribution from a texture
 	float fog_of_war_amount = 1.0;
-	float dust_amount = 0.0;
 	if (ENABLE_FOG_OF_WAR)
 	{
 		vec2 FOG_TEX_SIZE = vec2( 64.0 ) * camera_inv_zoom_ratio;
@@ -368,7 +375,6 @@ void main()
 		#endif
 
 		fog_of_war_amount = fog_value.r * (1.0-light_tex_sample.a); // light_tex_sample.a contains "fog of war holes" (for example temporary holes caused by explosions)
-		dust_amount = fog_value.g;
 	}
 
 // ============================================================================================================
@@ -397,37 +403,26 @@ void main()
 // ==========================================================================================================
 // fog of war ================================================================================================
 
-	float fog_of_war_sky_ambient_amount = sky_ambient_amount;
-	float fade = clamp( (world_pos.y - 250.0) / 100.0, 0.0, 1.0 );
-	fog_of_war_sky_ambient_amount *= 1.0-fade;
-	float sky_ambient2 = sqrt( fog_of_war_sky_ambient_amount );
+	float sky_ambient2 = sqrt( sky_ambient_amount );
 	vec3 fog_of_war = 1.4 * vec3(0.6,0.5,0.45) * vec3( max( 0.0, 1.0 - fog_of_war_amount - sky_ambient2 ) );
-	// fog_of_war = min( vec3(1.0), max( dither_srgb( 1.1 * fog_of_war, noise.b, 32.0 ), fog_of_war_sky_ambient_amount ) );
+	// fog_of_war = min( vec3(1.0), max( dither_srgb( 1.1 * fog_of_war, noise.b, 32.0 ), sky_ambient_amount ) );
 	// fog_of_war = pow( fog_of_war, vec3( 0.6 ) );
-	fog_of_war = min( vec3(1.0), max( dither_srgb( 2.0 * fog_of_war, noise.b, 32.0 ), fog_of_war_sky_ambient_amount ) );
+	fog_of_war = min( vec3(1.0), max( dither_srgb( 2.0 * fog_of_war, noise.b, 32.0 ), sky_ambient_amount ) );
 
 	lights *= fog_of_war;
-	lights += max(0.35 - fog_of_war_sky_ambient_amount, 0.0) * dither_srgb( fog_of_war, noise.b, 128.0 );
+	lights += max(0.35 - sky_ambient_amount, 0.0) * dither_srgb( fog_of_war, noise.b, 128.0 );
 
 // ==========================================================================================================
 // apply fog ================================================================================================
 
-	float luminousity = sqrt(min(1.0,dot(lights, vec3(0.299, 0.587, 0.114)*1.0)));
-
-	float fog_amount_underground = dust_amount;
-	float fog_amount_fg = mix( fog_amount_underground, fog_amount_foreground, sky_ambient_amount );
-	fog_amount = max(fog_amount,fog_amount_underground);
-	float fog_amount_multiplier_final = max(sky_ambient_amount, fog_amount_underground * luminousity * min(1.0,noise_perlin2.x*noise_perlin2.x*2.0) );
-
-	vec4 fog_color_fg = mix( FOG_FOREGROUND, FOG_FOREGROUND_NIGHT, max(night_amount,1.0-sky_ambient_amount) );
+	vec4 fog_color_fg = mix( FOG_FOREGROUND, FOG_FOREGROUND_NIGHT, night_amount );
 	vec3 fog_color_bg = mix( FOG_BACKGROUND, FOG_BACKGROUND_NIGHT, night_amount );
 
 	fog_amount = dither_srgb(vec3(fog_amount), noise.b, 64.0).r;
-	fog_amount = fog_amount_fg * fog_amount;
+	fog_amount = fog_amount_foreground * fog_amount;
 	
-	// apply fog to bg
-	color = mix(color, fog_color_bg, fog_amount_background);
-	color = mix(color , dither_srgb(color, noise.a, 64.0 ), fog_amount );
+	color    = mix(color,    fog_color_bg, fog_amount_background);
+	color    = mix(color ,   dither_srgb(color, noise.a, 64.0 ), fog_amount );
 
 // ==========================================================================================================
 // nightvision ==============================================================================================
@@ -450,7 +445,7 @@ void main()
 		color_fg.rgb *= lights;
 
 	// fog
-	color_fg.rgb = mix( color_fg.rgb, fog_color_fg.rgb, fog_amount_fg * fog_amount_multiplier_final );
+	color_fg.rgb = mix( color_fg.rgb, fog_color_fg.rgb, fog_amount_foreground * sky_ambient_amount );
 
 	// combine foreground and background
 	color = color_fg.rgb * color_fg.a + color * (1.0-color_fg.a);
@@ -458,10 +453,10 @@ void main()
 // ============================================================================================================
 // color correction effect ====================================================================================
 
-	color = mix(color, vec3((color.r + color.g + color.b) * 0.3333), color_grading.a);
-	color = color * color_grading.rgb;
-	vec3 color2 = color;
-	//color = mix(color2, color, clamp( color_grading.a - glow * 3.0, 0.0, 1.0 ) ); // min(sqrt(sky_ambient_amount) * 5.0, 1.0) - glow * 3.0);
+	//vec3 color2 = color; // mix(color, vec3((color.r + color.g + color.b) * 0.3333), 0.5);
+	//color *= color_correction.rgb;
+	//color = mix(color, color2, clamp( color_correction.a - glow * 3.0, 0.0, 1.0 ) ); // min(sqrt(sky_ambient_amount) * 5.0, 1.0) - glow * 3.0);
+
 
 // ============================================================================================================
 // apply glow effect using a variation of screen blending. the glow is reduced on areas with bright sky light =
@@ -484,6 +479,34 @@ void main()
 	float brightness_shroom = max(color.r, max(color.g, color.b) );
 	color.g = mix( color.g, brightness_shroom * 2.0 * color.g * (sin( time * 1.5 ) + 1.0) * 0.5 + noise.b / 64.0, drugged_color_amount);
 
+if (is_enraged) {
+    // Some crazy RGB to HSV conversion, of which I have zero idea how it works.
+    // Credit goes here: https://stackoverflow.com/a/17897228
+    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    vec4 p = mix(vec4(color.bg, K.wz), vec4(color.gb, K.xy), step(color.b, color.g));
+    vec4 q = mix(vec4(p.xyw, color.r), vec4(color.r, p.yzx), step(p.x, color.r));
+
+    float d = q.x - min(q.w, q.y);
+    float e = 1.0e-10;
+    vec3 hsv = vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+
+    // On the HSV wheel it's easy to filter just the hues of reds.
+    // We let through relatively many "high reds", because the transulent blood can be quite pinkish on certain backgrounds.
+    bool low_red = hsv.x < 10.0/360.0;
+    bool high_red = hsv.x > 345.0/360.0;
+    bool is_red =  low_red || high_red;
+
+    // float gb_threshold = 80.0/255.0;
+    // float r_threshold = (color.r > color.b + gb_threshold && color.r > color.g + gb_threshold);
+    // is_red = (color.r > r_threshold) && (color.b <= gb_threshold && color.g <= gb_threshold);
+
+    if (!is_red) {
+        const vec3 weight = vec3(0.2120,  0.7010, 0.0870);
+        float greyscale = dot(color.rgb, weight);
+        color = vec3(greyscale, greyscale, greyscale);
+    }
+}
+
 // ============================================================================================================
 // drunken afterimage effect ==================================================================================
 
@@ -493,8 +516,7 @@ void main()
 // ============================================================================================================
 // additive overlay ===========================================================================================
 
-	// color.rgb += additive_overlay_color.rgb * additive_overlay_color.a; // TODO: combine with damage flash
-	color.rgb = mix( color, additive_overlay_color.rgb, additive_overlay_color.a );
+	color.rgb += additive_overlay_color.rgb * additive_overlay_color.a; // TODO: combine with damage flash
 
 // ============================================================================================================
 // brightness / contrast=======================================================================================
@@ -515,6 +537,8 @@ void main()
 
 	color.rgb = mix( color, overlay_color.rgb, overlay_color.a );
 	color.rgb = mix( color, overlay_color_blindness.rgb, overlay_color_blindness.a * 0.5 + overlay_color_blindness.a * edge_dist*edge_dist * 40.0);
+	
+	color.rgb = mix( color, overlay_color_blindness_ending.rgb, overlay_color_blindness_ending.a * 0.5 + overlay_color_blindness_ending.a * edge_dist*edge_dist * 40.0);
 
 // ============================================================================================================
 // low health indicator =======================================================================================
